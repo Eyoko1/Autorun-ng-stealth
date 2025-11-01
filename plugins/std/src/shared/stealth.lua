@@ -1,4 +1,5 @@
-jit = {
+--> having all of this isn't necessary but it's here anyway
+local jit = {
     opt = {
         start = _G.jit.opt.start
     },

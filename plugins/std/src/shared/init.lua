@@ -21,6 +21,7 @@ function Autorun.include(path)
     return ok()
 end
 
+Autorun.include("shared/stealth.lua")
 Autorun.include("shared/builtins.lua")
 Autorun.include("shared/require.lua")
 Autorun.include("shared/event.lua")
