@@ -2,15 +2,17 @@ pub mod global;
 
 use anyhow::Context;
 use autorun_core::plugins::Plugin;
+use autorun_log::*;
 use autorun_lua::{LuaApi, RawHandle};
-use autorun_luajit::{GCRef, GCfunc, LJState, get_gcobj, index2adr};
+use autorun_luajit::{GCRef, LJState, index2adr};
 use autorun_types::{LuaState, Realm};
-use std::ffi::{CStr, c_int};
+use std::ffi::{CStr, CString, c_int};
 
 #[derive(Debug, Clone, Copy)]
 pub struct EnvHandle {
 	realm: Realm,
 	env_gcr: GCRef,
+	chunk_nonce: u64,
 	handle: RawHandle,
 }
 
@@ -29,7 +31,7 @@ macro_rules! as_env_lua_function {
 			let env = crate::global::get_realm_env(realm).ok_or_else(|| anyhow::anyhow!("env doesn't exist somehow"))?;
 
 			if !env.is_active(lua, state) {
-				autorun_log::warn!(
+				warn!(
 					"Attempted to call '{}' outside of authorized environment",
 					stringify!($func)
 				);
@@ -89,10 +91,10 @@ impl EnvHandle {
 
 		let dir = lua.to_userdata(state, -1) as *mut Plugin;
 		if dir.is_null() {
-			lua.pop(state, 3);
+			lua.pop(state, 2);
 			return None;
 		}
-		lua.pop(state, 3);
+		lua.pop(state, 2);
 
 		unsafe { dir.as_ref() }
 	}
@@ -164,23 +166,28 @@ impl EnvHandle {
 		lua.push(state, as_env_lua_function!(crate::functions::is_function_authorized));
 		lua.set_table(state, -3);
 
+		lua.push(state, c"isProtoAuthorized");
+		lua.push(state, as_env_lua_function!(crate::functions::is_proto_authorized));
+		lua.set_table(state, -3);
+
 		lua.push(state, c"VERSION");
 		lua.push(state, env!("CARGO_PKG_VERSION").to_string());
 		lua.set_table(state, -3);
 	}
 
 	pub fn execute(&self, lua: &LuaApi, state: *mut LuaState, name: &CStr, src: &[u8]) -> anyhow::Result<()> {
-		if let Err(why) = lua.load_buffer_x(state, src, name, c"t") {
-			return Err(anyhow::anyhow!("Failed to compile: {why}"));
+		let name = self.format_chunk_name(name)?;
+		if let Err(why) = lua.load_buffer_x(state, src, &name, c"t") {
+			anyhow::bail!("Failed to compile: {why}");
 		}
 
 		self.push(lua, state);
 		if lua.set_fenv(state, -2).is_err() {
-			return Err(anyhow::anyhow!("Failed to set environment"));
+			anyhow::bail!("Failed to set environment");
 		}
 
 		if let Err(why) = lua.pcall(state, 0, 0, 0) {
-			return Err(anyhow::anyhow!("Failed to execute: {}", why));
+			anyhow::bail!("Failed to execute: {}", why);
 		}
 
 		Ok(())
@@ -205,7 +212,25 @@ impl EnvHandle {
 		let env_gcr = unsafe { (*env_tvalue).gcr };
 
 		let handle = RawHandle::from_stack(lua, state).unwrap();
-		Ok(Self { realm, env_gcr, handle })
+		let chunk_nonce = rand::random::<u64>();
+		Ok(Self {
+			realm,
+			env_gcr,
+			chunk_nonce,
+			handle,
+		})
+	}
+
+	pub fn format_chunk_name(&self, base: &CStr) -> anyhow::Result<CString> {
+		let formatted = format!("{}-{}", self.chunk_nonce, base.to_str()?);
+		Ok(CString::new(formatted)?)
+	}
+
+	pub fn is_chunk_name_authorized(&self, chunk_name: &CStr) -> bool {
+		match chunk_name.to_str() {
+			Ok(name_str) => name_str.starts_with(&self.chunk_nonce.to_string()),
+			Err(_) => false,
+		}
 	}
 
 	fn push_autorun_table(&self, lua: &LuaApi, state: *mut LuaState) {

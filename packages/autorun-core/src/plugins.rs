@@ -18,6 +18,19 @@ impl core::fmt::Display for Plugin {
 	}
 }
 
+impl core::fmt::Debug for Plugin {
+	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+		let cfg = &self.config;
+		f.debug_struct("Plugin")
+			.field("name", &cfg.plugin.name)
+			.field("author", &cfg.plugin.author)
+			.field("version", &cfg.plugin.version)
+			.field("description", &cfg.plugin.description)
+			.field("language", &cfg.plugin.language)
+			.finish()
+	}
+}
+
 impl Plugin {
 	const PLUGIN_CONFIG: &str = "plugin.toml";
 
@@ -72,7 +85,7 @@ impl Plugin {
 
 	pub fn from_dir(dir: Dir) -> anyhow::Result<Self> {
 		if !dir.exists(Self::PLUGIN_CONFIG) {
-			return Err(anyhow::anyhow!("Plugin config not found"));
+			anyhow::bail!("Plugin config not found");
 		}
 
 		let data_dir = match dir.exists(Self::PLUGIN_DATA) {
